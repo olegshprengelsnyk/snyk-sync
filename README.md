@@ -1,3 +1,6 @@
+# REPOSITORY ARCHIVED
+Snyk Sync has been renamed to `snyk-scm-mapper`. This repository (and docker images) will be kept as a public archive, all new development will be done on the new repository [here](https://github.com/snyk-labs/snyk-scm-mapper).
+
 # Snyk Sync
 
 A way to ensure your GitHub Repos containing projects that can be monitored by Snyk are infact monitored by Snyk.
