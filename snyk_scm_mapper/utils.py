@@ -1,6 +1,8 @@
+import functools
 import json
 import logging
 from datetime import datetime
+from enum import Enum
 from logging import exception
 from os import environ
 from os import path
@@ -28,22 +30,52 @@ from typer import Context
 
 
 V3_VERS = "2021-08-20~beta"
-USER_AGENT = "pysnyk/snyk_services/snyk_sync"
+USER_AGENT = "pysnyk/snyk_services/snyk_scm_mapper"
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(filename="snyk_sync.log", filemode="w", encoding="utf-8")
+FORMAT = "[%(filename)s:%(lineno)4s - %(funcName)s ] %(message)s"
+logging.basicConfig(filename="snyk_scm_mapper.log", filemode="w", format=FORMAT, encoding="utf-8")
 
 
+def set_log_level(log_level: str, set_root: bool = False):
+    logger.setLevel(logging.getLevelName(log_level))
+    if set_root:
+        logging.root.setLevel(logging.getLevelName(log_level))
+
+
+def log(func):
+    if logger.level <= logging.DEBUG:
+
+        @functools.wraps(func)
+        def log_wrapper(*args, **kwargs):
+            args_repr = [repr(a) for a in args]
+            kwargs_repr = [f"{k}={v!r}" for k, v in kwargs.items()]
+            signature = ", ".join(args_repr + kwargs_repr)
+            logger.debug(f"function {func.__name__} called with args {signature}")
+            try:
+                result = func(*args, **kwargs)
+                return result
+            except Exception as e:
+                logger.exception(f"Exception raised in {func.__name__}. exception: {str(e)}")
+                raise e
+
+        return log_wrapper
+    return func
+
+
+@log
 def jprint(something):
     print(json.dumps(something, indent=2))
 
 
+@log
 def jopen(filename):
     with open(filename, "r") as the_file:
         data = the_file.read()
     return json.loads(data)
 
 
+@log
 def jwrite(data, filename, minimize: bool = False):
     try:
         with open(filename, "w") as the_file:
@@ -56,12 +88,14 @@ def jwrite(data, filename, minimize: bool = False):
         return False
 
 
+@log
 def yopen(filename):
     with open(filename, "r") as the_file:
         data = the_file.read()
     return yaml.safe_load(data)
 
 
+@log
 def newer(cached: str, remote: str) -> bool:
     # 2021-08-25T13:37:43Z
 
@@ -73,6 +107,7 @@ def newer(cached: str, remote: str) -> bool:
     return bool(remote_ts < cache_ts)
 
 
+@log
 def make_v3_get(endpoint, token):
     V3_API = "https://api.snyk.io/v3"
     USER_AGENT = "pysnyk/snyk_services/target_sync"
@@ -85,13 +120,14 @@ def make_v3_get(endpoint, token):
     return client.get(url)
 
 
+@log
 def v3_get(endpoint, token, delay=1):
     result = retry_call(make_v3_get, fkwargs={"endpoint": endpoint, "token": token}, tries=3, delay=delay)
     return result
 
 
+@log
 def get_org_targets(org: dict, token: str) -> list:
-
     print(f"getting {org['id']} / {org['slug']} targets")
     targets_raw = v3_get(f"orgs/{org['id']}/targets?version={V3_VERS}", token)
 
@@ -102,11 +138,12 @@ def get_org_targets(org: dict, token: str) -> list:
     return targets
 
 
+@log
 def get_org_projects(org: dict, token: str) -> dict:
-
     print(f"getting {org['id']} / {org['slug']} projects")
 
     try:
+        # V3 API call - /projects
         first_resp = v3_get(f"orgs/{org['id']}/projects?version={V3_VERS}", token)
     except Exception as e:
         print(f"{org['id']} project lookup failed with {e}")
@@ -132,19 +169,7 @@ def get_org_projects(org: dict, token: str) -> dict:
     return orgs_resp
 
 
-def search_projects(base_name, origin, client, snyk_token, org_in: dict):
-
-    org: Dict = dict()
-
-    org["id"] = org_in["orgId"]
-    org["slug"] = list(org_in)[0]
-
-    query = {"filters": {"origin": origin, "name": base_name}}
-    path = f"org/{org['id']}/projects"
-
-    return json.loads(client.post(path, query).text)
-
-
+@log
 def to_camel_case(snake_str):
     components = snake_str.split("_")
     # We capitalize the first letter of each component except the first one
@@ -152,11 +177,12 @@ def to_camel_case(snake_str):
     return components[0] + "".join(x.title() for x in components[1:])
 
 
+@log
 def default_settings(
     name: Optional[str], value: str, default: Union[Any, Callable[[], Any], None], context: Context
 ) -> Settings:
     """
-    We want a self / auto configuring experience for Snyk Sync, but also allow for options to be passed from ENV, CLI, OR a config file.
+    We want a self / auto configuring experience for Snyk Scm Mapper, but also allow for options to be passed from ENV, CLI, OR a config file.
     CLI overrides ENV, and typer handles that for us. But we want CLI and ENV to override the config file, so we need to load that value
     Also we have a lot of relativistic values, ie the tags directory is in the root of the folder containing the config file
     So if tag_dir isn't set by CLI or ENV, it ends up here. Then if it's not set in the conf file, we want to return the directory of the
@@ -214,7 +240,6 @@ def default_settings(
 
     # our directories are always 'dirname'_dir
     if "_dir" in str(name):
-
         dirname: str = str(name).split("_")[0]
 
         the_dir_path = gen_path(conf_file, dirname)
@@ -225,7 +250,6 @@ def default_settings(
         return the_dir_path
 
     if name == "snyk_token":
-
         token_env_name = s["snyk"]["groups"][0]["token_env_name"]
 
         if token_env_name in environ.keys():
@@ -236,7 +260,6 @@ def default_settings(
         return token
 
     if name == "github_token":
-
         token_env_name = s["github_token_env_name"]
 
         if token_env_name in environ.keys():
@@ -255,12 +278,14 @@ def default_settings(
     return default
 
 
+@log
 def gen_path(parent_file: Path, child: str):
     the_path_string = f"{parent_file.parent}/{child}"
 
     return Path(the_path_string)
 
 
+@log
 def ensure_dir(directory: Path) -> bool:
     if not directory.exists():
         try:
@@ -275,6 +300,7 @@ def ensure_dir(directory: Path) -> bool:
         return True
 
 
+@log
 def load_watchlist(cache_dir: Path) -> SnykWatchList:
     tmp_watchlist = SnykWatchList()
     cache_data_errors = []
@@ -293,7 +319,10 @@ def load_watchlist(cache_dir: Path) -> SnykWatchList:
         try:
             tmp_watchlist.repos.append(Repo.parse_obj(repo))
         except Exception as e:
+            logger.exception(f"error loading watchlist, error={str(e)}")
+            logger.exception(f"Error {repr(e)} attempting to parse import.yaml in repo {repo['url']}")
             cache_data_error_string = f"Error {repr(e)} attempting to parse import.yaml in repo {repo['url']}"
+
             # print(f"{cache_data_error_string}")
             cache_data_errors.append(cache_data_error_string)
 
@@ -305,6 +334,7 @@ def load_watchlist(cache_dir: Path) -> SnykWatchList:
     return tmp_watchlist
 
 
+@log
 def update_client(old_client, token):
     old_client.api_token = token
     old_client.api_headers["Authorization"] = f"token {old_client.api_token}"
@@ -313,12 +343,14 @@ def update_client(old_client, token):
     return old_client
 
 
+@log
 def filter_chunk(chunk, exclude_list):
     return [y for y in chunk if y.repository.id not in exclude_list and y.name == "import.yaml"]
 
 
 # Function wrappers for GitHub API calls. Here we simply wrap the original call in a function which is decorated with
 # a "backoff". This will catch rate limit exceptions and automatically retry the function.
+@log
 @backoff.on_exception(backoff.expo, RateLimitExceededException)
 def get_page_wrapper(pg_list: PaginatedList, page_number: int, show_rate_limit: bool = False):
     try:
@@ -329,6 +361,7 @@ def get_page_wrapper(pg_list: PaginatedList, page_number: int, show_rate_limit: 
         raise e
 
 
+@log
 @backoff.on_exception(backoff.expo, RateLimitExceededException)
 def get_organization_wrapper(gh: Github, gh_org_name: str, show_rate_limit: bool = False):
     try:
@@ -339,6 +372,18 @@ def get_organization_wrapper(gh: Github, gh_org_name: str, show_rate_limit: bool
         raise e
 
 
+@log
+@backoff.on_exception(backoff.expo, RateLimitExceededException)
+def get_repo_count_wrapper(gh: Github, repos, show_rate_limit: bool = False):
+    try:
+        return repos.totalCount
+    except RateLimitExceededException as e:
+        if not show_rate_limit:
+            typer.echo("GitHub rate limit was hit.. backing off...")
+        raise e
+
+
+@log
 @backoff.on_exception(backoff.expo, RateLimitExceededException)
 def get_repos_wrapper(gh_org: Organization, type: str, sort: str, direction: str, show_rate_limit: bool = False):
     try:
